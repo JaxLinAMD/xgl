@@ -1,27 +1,9 @@
 ##
- #######################################################################################################################
- #
- #  Copyright (c) 2017-2021 Advanced Micro Devices, Inc. All Rights Reserved.
- #
- #  Permission is hereby granted, free of charge, to any person obtaining a copy
- #  of this software and associated documentation files (the "Software"), to deal
- #  in the Software without restriction, including without limitation the rights
- #  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- #  copies of the Software, and to permit persons to whom the Software is
- #  furnished to do so, subject to the following conditions:
- #
- #  The above copyright notice and this permission notice shall be included in all
- #  copies or substantial portions of the Software.
- #
- #  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- #  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- #  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- #  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- #  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- #  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- #  SOFTWARE.
- #
- #######################################################################################################################
+########################################################################################################################
+#
+#  Copyright (C) 2017-2021 Advanced Micro Devices, Inc. All rights reserved.
+#
+########################################################################################################################
 cmake_minimum_required(VERSION 3.13.4)
 
 # This part set before "project(XGL VERSION 1 LANGUAGES C CXX)".
@@ -35,13 +17,22 @@ endif()
 
 project(XGL VERSION 1 LANGUAGES C CXX)
 
+
 ### CMake Includes ####################################################################################################
 set(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake)
 list(APPEND CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake/Modules)
 
+#if VKI_CLOSED_SOURCE
+# Add //depot/main/cmake/ into CMAKE_MODULE_PATH for the closed-source driver.
+# For the open source, it locates the same directory as xgl.
+if(EXISTS ${PROJECT_SOURCE_DIR}/../../cmake)
+    list(APPEND CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/../../cmake)
+endif()
+#else
 if(EXISTS ${PROJECT_SOURCE_DIR}/../cmake)
     list(APPEND CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/../cmake)
 endif()
+#endif
 
 include(AmdCmakeHelper)
 include(CMakeDependentOption)
@@ -51,6 +42,11 @@ include(XglOverrides)
 include(XglCompilerOptions)
 include(XglCompileDefinitions)
 include(XglHelper)
+#if CPACK_PACKAGE
+if(UNIX)
+  include(XglPackaging)
+endif()
+#endif
 
 ### Project Options ###################################################################################################
 xgl_options()
@@ -126,6 +122,14 @@ if(XGL_USE_SANITIZER)
             xgl_append_common_sanitizer_flags()
             string(APPEND ICD_SANITIZER_COMPILE_FLAGS " -fsanitize=address")
             string(APPEND ICD_SANITIZER_LINK_FLAGS " -fsanitize=address")
+        elseif (XGL_USE_SANITIZER MATCHES "Memory(WithOrigins)?")
+            xgl_append_common_sanitizer_flags()
+            string(APPEND ICD_SANITIZER_COMPILE_FLAGS " -fsanitize=memory")
+            string(APPEND ICD_SANITIZER_LINK_FLAGS " -fsanitize=memory")
+            if(XGL_USE_SANITIZER STREQUAL "MemoryWithOrigins")
+                string(APPEND ICD_SANITIZER_COMPILE_FLAGS " -fsanitize-memory-track-origins")
+                string(APPEND ICD_SANITIZER_LINK_FLAGS " -fsanitize-memory-track-origins")
+            endif()
         elseif(XGL_USE_SANITIZER STREQUAL "Undefined")
             xgl_append_common_sanitizer_flags()
             string(APPEND ICD_SANITIZER_COMPILE_FLAGS " -fsanitize=undefined -fno-sanitize=vptr,function \
@@ -141,6 +145,10 @@ if(XGL_USE_SANITIZER)
             string(APPEND ICD_SANITIZER_COMPILE_FLAGS " -fsanitize=address,undefined -fno-sanitize=vptr,function \
                                                         -fno-sanitize-recover=all")
             string(APPEND ICD_SANITIZER_LINK_FLAGS " -fsanitize=address,undefined")
+        elseif(XGL_USE_SANITIZER STREQUAL "Leaks")
+            xgl_append_common_sanitizer_flags()
+            string(APPEND ICD_SANITIZER_COMPILE_FLAGS " -fsanitize=leak")
+            string(APPEND ICD_SANITIZER_LINK_FLAGS " -fsanitize=leak")
         else()
             message(FATAL_ERROR "Unsupported value of XGL_USE_SANITIZER: ${XGL_USE_SANITIZER}")
         endif()
@@ -165,6 +173,18 @@ string(APPEND CMAKE_EXE_LINKER_FLAGS "${ICD_SANITIZER_LINK_FLAGS}")
 string(APPEND CMAKE_SHARED_LINKER_FLAGS "${ICD_SANITIZER_LINK_FLAGS}")
 string(APPEND CMAKE_C_FLAGS "${ICD_SANITIZER_COMPILE_FLAGS}")
 string(APPEND CMAKE_CXX_FLAGS "${ICD_SANITIZER_COMPILE_FLAGS}")
+
+# LLVM libc++
+if(XGL_ENABLE_LIBCXX)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        string(APPEND CMAKE_EXE_LINKER_FLAGS " -stdlib=libc++")
+        string(APPEND CMAKE_SHARED_LINKER_FLAGS " -stdlib=libc++")
+        string(APPEND CMAKE_MODULE_LINKER_FLAGS " -stdlib=libc++")
+        string(APPEND CMAKE_CXX_FLAGS " -stdlib=libc++")
+    else()
+        message(WARNING "Not sure how to specify libc++ for this compiler")
+    endif()
+endif()
 
 ### GCOV source code coverage #########################################################################################
 # Temporary variables
@@ -193,6 +213,11 @@ find_package(PythonInterp 3)
 if(NOT PYTHONINTERP_FOUND)
     if(UNIX)
         message(FATAL_ERROR "Python 3 is needed to generate some source files.")
+#if _WIN32
+    elseif(WIN32)
+        set(PYTHON_EXECUTABLE ${PROJECT_SOURCE_DIR}/tools/python33/python.exe)
+        message(STATUS "Using the Python found at ${PYTHON_EXECUTABLE} instead.")
+#endif
     endif()
 else()
     if(UNIX)
@@ -208,6 +233,11 @@ find_package(Perl 5)
 if(NOT PERL_FOUND)
     if(UNIX)
         message(FATAL_ERROR "Perl 5 is needed to generate some source files.")
+#if _WIN32
+    elseif(WIN32 AND DEFINED GLOBAL_ROOT_DK_DIR)
+        set(PERL_EXECUTABLE ${GLOBAL_ROOT_DK_DIR}/perl/5.16.1/bin/Perl.exe)
+        message(STATUS "Using the Perl found at ${PERL_EXECUTABLE} instead.")
+#endif
     endif()
 endif()
 set(PERL_CMD ${PERL_EXECUTABLE})
@@ -216,6 +246,23 @@ set(PERL_CMD ${PERL_EXECUTABLE})
 if (BUILD_WAYLAND_SUPPORT)
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(WAYLAND REQUIRED wayland-client)
+endif()
+
+# Other Dependencies
+if(UNIX)
+#if __ANDROID__
+if(NOT ANDROID)
+#endif
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(LIBSSL REQUIRED libssl)
+    pkg_check_modules(XCB_DRI2 REQUIRED xcb-dri2)
+    pkg_check_modules(XCB_DRI3 REQUIRED xcb-dri3)
+    pkg_check_modules(XCB_PRESENT REQUIRED xcb-present)
+    pkg_check_modules(XRANDR REQUIRED xrandr)
+    pkg_check_modules(XSHMFENCE REQUIRED xshmfence)
+#if __ANDROID__
+endif()
+#endif
 endif()
 
 ### Khronos Interface #################################################################################################
@@ -238,6 +285,13 @@ else()
     )
 endif()
 
+#if CPACK_PACKAGE
+### Identify Packge Type ##########################################################################################
+if(UNIX)
+  identifyPackageType()
+endif()
+#endif
+
 ### Add Subdirectories ################################################################################################
 # Metrohash
 if(EXISTS ${XGL_METROHASH_PATH})
@@ -256,8 +310,31 @@ endif()
 # VKGC compiler
 add_subdirectory(${XGL_VKGC_PATH} ${CMAKE_BINARY_DIR}/compiler)
 
-# icd
-if(NOT ICD_BUILD_LLPCONLY)
-add_subdirectory(icd)
+#if ICD_BUILD_SCPC
+if(ICD_BUILD_SPVONLY)
+    add_subdirectory(${XGL_VKGC_PATH}/bil/tool ${CMAKE_BINARY_DIR}/compiler/bil/tool)
 endif()
+#endif
 
+# icd
+#if ICD_BUILD_SCPC
+if(NOT ICD_BUILD_SPVONLY)
+#endif
+#if ICD_BUILD_LLPC
+if(NOT ICD_BUILD_LLPCONLY)
+#endif
+add_subdirectory(icd)
+#if ICD_BUILD_LLPC
+endif()
+#endif
+#if ICD_BUILD_SCPC
+endif()
+#endif
+
+#if CPACK_PACKAGE
+### Generate Packages #################################################################################################
+if(UNIX)
+  generateInstallTargets()
+  generatePackageTarget()
+endif()
+#endif
